@@ -1,0 +1,25 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cloudflare Wrangler
+.wrangler/
+dist/
+
+# Environment and sensitive keys
+.env
+.env.*
+*.pem
+*.key
+
+# Operating system artifacts
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Security safeguards added by GitHub Manager
+.git-credentials
+*.log

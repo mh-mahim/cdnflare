@@ -1,0 +1,20 @@
+{
+  "name": "cdn-download-accelerator",
+  "version": "1.0.0",
+  "description": "High-speed Cloudflare CDN reverse proxy and download accelerator with Range support and Web UI",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "cdn",
+    "reverse-proxy",
+    "download-accelerator",
+    "bdix",
+    "streaming"
+  ],
+  "author": "mh-mahim",
+  "license": "MIT"
+}
