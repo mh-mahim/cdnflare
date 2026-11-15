@@ -1,4 +1,4 @@
-# Cloudflare Edge Stream Accelerator
+# CDNFlare
 
 An edge-powered HTTP reverse proxy designed for Cloudflare Workers that accelerates file downloads through local network peering and edge-optimized streaming.
 
@@ -22,8 +22,8 @@ An edge-powered HTTP reverse proxy designed for Cloudflare Workers that accelera
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/mh-mahim/cdn-download-accelerator.git
-   cd cdn-download-accelerator
+   git clone https://github.com/mh-mahim/cdnflare.git
+   cd cdnflare
    ```
 
 2. Authenticate with Wrangler:
@@ -36,7 +36,7 @@ An edge-powered HTTP reverse proxy designed for Cloudflare Workers that accelera
    npx wrangler deploy
    ```
 
-Your service will be accessible at: `https://cdn-download-accelerator.<subdomain>.workers.dev`
+Your service will be accessible at: `https://cdnflare.<subdomain>.workers.dev`
 
 ## Usage Guide
 
@@ -46,23 +46,23 @@ Open the deployed worker URL in a browser, enter your target download link, and 
 ### 2. URL Path Format
 Prepend the worker URL to your file link:
 ```
-https://cdn-download-accelerator.<subdomain>.workers.dev/https://example.com/archive.zip
+https://cdnflare.<subdomain>.workers.dev/https://example.com/archive.zip
 ```
 
 ### 3. Query Parameter Format
 ```
-https://cdn-download-accelerator.<subdomain>.workers.dev/?url=https://example.com/archive.zip
+https://cdnflare.<subdomain>.workers.dev/?url=https://example.com/archive.zip
 ```
 
 ### 4. CLI Tools
 
 - **Aria2 (16 Connections):**
   ```bash
-  aria2c -s 16 -x 16 "https://cdn-download-accelerator.<subdomain>.workers.dev/?url=https://example.com/file.iso"
+  aria2c -s 16 -x 16 "https://cdnflare.<subdomain>.workers.dev/?url=https://example.com/file.iso"
   ```
 - **cURL:**
   ```bash
-  curl -L -O -C - "https://cdn-download-accelerator.<subdomain>.workers.dev/?url=https://example.com/file.iso"
+  curl -L -O -C - "https://cdnflare.<subdomain>.workers.dev/?url=https://example.com/file.iso"
   ```
 
 ## Security Settings

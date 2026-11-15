@@ -1,9 +1,9 @@
-# Project Brief: CDN Download Accelerator
+# Project Brief: CDNFlare
 
 ## 🎯 Executive Summary
-In Bangladesh, local ISP peering with Cloudflare's Dhaka PoP (`DAC`) and BDIX enables download speeds up to 100 Mbps. However, downloading files directly from distant or unoptimized international servers often suffers from high packet loss and throttles down to 2–5 Mbps.
+Downloading files directly from distant or unoptimized international servers often suffers from high latency, packet loss, and severe ISP throttling down to 2–5 Mbps.
 
-**CDN Download Accelerator** solves this problem by using Cloudflare Workers as a transparent, high-speed reverse proxy edge. When a user pastes a target file URL into the system, Cloudflare's global edge network fetches the file directly over its enterprise-grade backbone and streams it to the user through the local Dhaka PoP, achieving full line speed (up to 95 Mbps).
+**CDNFlare** solves this problem by using Cloudflare Workers as a transparent, high-speed reverse proxy edge. When a user inputs a target file URL into the system, Cloudflare's global edge network fetches the file directly over its enterprise-grade backbone and streams it to the user through the nearest local edge PoP, achieving full line speed.
 
 ## 🚀 Key Objectives
 1. **Accelerated Throughput:** Bypass slow international routing and leverage local Cloudflare edge peering.

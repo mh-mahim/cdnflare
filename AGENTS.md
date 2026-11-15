@@ -1,6 +1,6 @@
-# CDN Download Accelerator - Project Agent Rules
+# CDNFlare - Project Agent Rules
 
-This project is a Cloudflare Workers-based reverse proxy & download accelerator designed to leverage Cloudflare's Dhaka PoP (`DAC`) and BDIX/local ISP peering to deliver accelerated download speeds (up to 100 Mbps) for slow international file sources.
+This project is a Cloudflare Workers-based reverse proxy & download accelerator designed to leverage Cloudflare's global edge network, local peering, and anycast routing to deliver accelerated download speeds for slow international file sources.
 
 ## Tech Stack
 - **Runtime:** Cloudflare Workers (V8 Serverless Edge Engine)

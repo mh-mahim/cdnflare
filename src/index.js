@@ -1,7 +1,7 @@
 /**
- * Cloudflare CDN Reverse Proxy & Download Accelerator
+ * CDNFlare - High-Speed Cloudflare Edge Download Accelerator & Reverse Proxy
  * Author: mh-mahim
- * Repository: https://github.com/mh-mahim/cdn-download-accelerator
+ * Repository: https://github.com/mh-mahim/cdnflare
  * License: MIT
  */
 
@@ -32,13 +32,13 @@ export default {
 
     if (!targetUrlParam) {
       // Check pathname (e.g. /https://example.com/file.zip or /http://...)
-      const rawPath = requestUrl.pathname.slice(1); // remove leading slash
+      const rawPath = requestUrl.pathname.slice(1);
       if (rawPath.startsWith("http://") || rawPath.startsWith("https://")) {
         targetUrlParam = rawPath + requestUrl.search;
       }
     }
 
-    // If no target URL, serve the Web UI (English)
+    // If no target URL, render the clean English Web UI
     if (!targetUrlParam) {
       return new Response(renderWebUI(requestUrl.origin), {
         headers: {
@@ -48,7 +48,7 @@ export default {
       });
     }
 
-    // Optional Access Token Authentication (if env.ACCESS_TOKEN is configured)
+    // Optional Access Token Authentication
     if (env.ACCESS_TOKEN) {
       const userToken = requestUrl.searchParams.get("token") || request.headers.get("x-access-token");
       if (userToken !== env.ACCESS_TOKEN) {
@@ -69,7 +69,7 @@ export default {
 
     // Prevent recursive proxy loops
     if (targetUrl.hostname === requestUrl.hostname) {
-      return jsonErrorResponse("Loop detected: The target URL cannot point to this accelerator worker.", 400);
+      return jsonErrorResponse("Loop detected: The target URL cannot point to this accelerator.", 400);
     }
 
     // Construct forward headers
@@ -99,7 +99,7 @@ export default {
         : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     );
 
-    // Origin Referer to defeat naive hotlink protections
+    // Origin Referer to defeat naive anti-hotlinking
     const clientReferer = request.headers.get("Referer");
     forwardHeaders.set("Referer", clientReferer || targetUrl.origin);
 
@@ -114,7 +114,7 @@ export default {
         redirect: "follow",
         cf: {
           cacheEverything: true,
-          cacheTtl: 86400 // Cache for 24 hours when eligible
+          cacheTtl: 86400
         }
       });
 
@@ -159,7 +159,7 @@ export default {
       responseHeaders.set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Disposition");
 
       // Accelerator signature headers
-      responseHeaders.set("X-Accelerated-By", "Cloudflare-Worker-Edge");
+      responseHeaders.set("X-Accelerated-By", "CDNFlare-Edge");
       responseHeaders.set("X-Origin-Status", originResponse.status.toString());
 
       // Stream directly to client without buffering entire body into RAM
@@ -202,7 +202,7 @@ function renderWebUI(origin) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CDN Download Accelerator | Cloudflare Edge</title>
+  <title>CDNFlare | High-Speed Edge Download Accelerator</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -274,7 +274,7 @@ function renderWebUI(origin) {
     }
 
     h1 {
-      font-size: 2.25rem;
+      font-size: 2.35rem;
       font-weight: 800;
       letter-spacing: -0.03em;
       line-height: 1.2;
@@ -376,7 +376,6 @@ function renderWebUI(origin) {
       border-color: #475569;
     }
 
-    /* Output Results Panel */
     .output-panel {
       display: none;
       margin-top: 1.5rem;
@@ -447,7 +446,6 @@ function renderWebUI(origin) {
       border-color: var(--accent);
     }
 
-    /* Features Grid */
     .features-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -509,10 +507,10 @@ function renderWebUI(origin) {
     <div class="header">
       <div class="badge">
         <span class="badge-dot"></span>
-        <span>Cloudflare Edge &bull; BDIX &amp; Local Peering</span>
+        <span>Cloudflare Edge &bull; Low-Latency Anycast Routing</span>
       </div>
-      <h1>CDN Download Accelerator</h1>
-      <p class="subtitle">Bypass international throttling and stream slow remote files at full line speed</p>
+      <h1>CDNFlare</h1>
+      <p class="subtitle">Accelerate remote downloads through Cloudflare's high-speed global edge network</p>
     </div>
 
     <div class="card">
@@ -560,22 +558,22 @@ function renderWebUI(origin) {
       <div class="feature-item">
         <div class="feature-icon">⚡</div>
         <div class="feature-title">HTTP 206 Partial Content</div>
-        <div class="feature-desc">Full <code>Range</code> support for IDM, resuming, and multi-threaded slicing.</div>
+        <div class="feature-desc">Full <code>Range</code> support for IDM, multi-threaded slicing, and resuming.</div>
       </div>
       <div class="feature-item">
         <div class="feature-icon">🛡️</div>
-        <div class="feature-title">Hotlink Bypass</div>
-        <div class="feature-desc">Auto-forwards origin referers to overcome anti-leech blocks.</div>
+        <div class="feature-title">Hotlink Protection Bypass</div>
+        <div class="feature-desc">Automatic origin referer headers to defeat anti-leech restrictions.</div>
       </div>
       <div class="feature-item">
         <div class="feature-icon">🌐</div>
-        <div class="feature-title">Zero-Buffer Stream</div>
-        <div class="feature-desc">Direct pipeline streaming supporting files of any size without RAM limits.</div>
+        <div class="feature-title">Zero-Buffer Pipeline</div>
+        <div class="feature-desc">Direct edge streaming supporting arbitrary file sizes with no RAM limits.</div>
       </div>
     </div>
 
     <div class="footer">
-      Open Source on <a href="https://github.com/mh-mahim/cdn-download-accelerator" target="_blank" rel="noopener">GitHub</a> &bull; Powered by Cloudflare Workers &bull; Crafted by <a href="https://github.com/mh-mahim" target="_blank" rel="noopener">mh-mahim</a>
+      CDNFlare &bull; Open Source on <a href="https://github.com/mh-mahim/cdnflare" target="_blank" rel="noopener">GitHub</a> &bull; Crafted by <a href="https://github.com/mh-mahim" target="_blank" rel="noopener">mh-mahim</a>
     </div>
   </div>
 
