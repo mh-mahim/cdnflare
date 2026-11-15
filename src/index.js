@@ -307,7 +307,7 @@ function renderWebUI(origin) {
 
     .input-wrapper {
       position: relative;
-      margin-bottom: 1.25rem;
+      margin-bottom: 1rem;
     }
 
     input[type="url"] {
@@ -326,6 +326,22 @@ function renderWebUI(origin) {
     input[type="url"]:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .speed-tip {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      background: #0c1322;
+      border: 1px solid #1e293d;
+      padding: 0.65rem 0.9rem;
+      border-radius: 8px;
+      margin-bottom: 1.25rem;
+      line-height: 1.45;
+    }
+
+    .speed-tip a {
+      color: var(--accent);
+      text-decoration: underline;
     }
 
     .btn-grid {
@@ -510,7 +526,7 @@ function renderWebUI(origin) {
         <span>Cloudflare Edge &bull; Low-Latency Anycast Routing</span>
       </div>
       <h1>CDNFlare</h1>
-      <p class="subtitle">Accelerate remote downloads through Cloudflare's high-speed global edge network</p>
+      <p class="subtitle">Jump your download speeds up to maximum edge line rate via Cloudflare</p>
     </div>
 
     <div class="card">
@@ -528,6 +544,10 @@ function renderWebUI(origin) {
           spellcheck="false"
           required 
         />
+      </div>
+
+      <div class="speed-tip">
+        ⚡ <strong>The Speed Jump:</strong> If your speed test at <a href="https://speed.cloudflare.com" target="_blank" rel="noopener">speed.cloudflare.com</a> is significantly faster than your direct download, CDNFlare routes your file through Cloudflare Edge to unlock full line speeds.
       </div>
 
       <div class="btn-grid">
@@ -556,14 +576,14 @@ function renderWebUI(origin) {
 
     <div class="features-grid">
       <div class="feature-item">
-        <div class="feature-icon">⚡</div>
-        <div class="feature-title">HTTP 206 Partial Content</div>
-        <div class="feature-desc">Full <code>Range</code> support for IDM, multi-threaded slicing, and resuming.</div>
+        <div class="feature-icon">🚀</div>
+        <div class="feature-title">Speed Jump Engine</div>
+        <div class="feature-desc">Unlocks full edge peering speed when direct origin downloads are throttled.</div>
       </div>
       <div class="feature-item">
-        <div class="feature-icon">🛡️</div>
-        <div class="feature-title">Hotlink Protection Bypass</div>
-        <div class="feature-desc">Automatic origin referer headers to defeat anti-leech restrictions.</div>
+        <div class="feature-icon">⚡</div>
+        <div class="feature-title">HTTP 206 Multi-Range</div>
+        <div class="feature-desc">Full <code>Range</code> support for IDM, multi-threaded slicing, and resuming.</div>
       </div>
       <div class="feature-item">
         <div class="feature-icon">🌐</div>
