@@ -27,18 +27,11 @@ export default {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
-    // 1. Extract Target URL from Query (?url=...) or Path (/https://...)
-    let targetUrlParam = requestUrl.searchParams.get("url");
+    // 1. Resilient Target URL Extraction
+    // Handles query string without parameter truncation and path prefixes (/https://...)
+    let targetUrlParam = extractTargetUrl(request.url);
 
-    if (!targetUrlParam) {
-      // Check pathname (e.g. /https://example.com/file.zip or /http://...)
-      const rawPath = requestUrl.pathname.slice(1);
-      if (rawPath.startsWith("http://") || rawPath.startsWith("https://")) {
-        targetUrlParam = rawPath + requestUrl.search;
-      }
-    }
-
-    // If no target URL, render the clean English Web UI
+    // If no target URL, render the clean English Web UI with Paste button
     if (!targetUrlParam) {
       return new Response(renderWebUI(requestUrl.origin), {
         headers: {
@@ -52,7 +45,7 @@ export default {
     if (env.ACCESS_TOKEN) {
       const userToken = requestUrl.searchParams.get("token") || request.headers.get("x-access-token");
       if (userToken !== env.ACCESS_TOKEN) {
-        return jsonErrorResponse("Unauthorized: Invalid or missing access token.", 401);
+        return renderError(request, "Unauthorized: Invalid or missing access token.", 401, targetUrlParam);
       }
     }
 
@@ -61,15 +54,15 @@ export default {
     try {
       targetUrl = new URL(targetUrlParam.trim());
       if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
-        return jsonErrorResponse("Invalid URL protocol. Only HTTP and HTTPS protocols are supported.", 400);
+        return renderError(request, "Invalid URL protocol. Only HTTP and HTTPS protocols are supported.", 400, targetUrlParam);
       }
     } catch {
-      return jsonErrorResponse("Malformed target URL. Please provide a valid absolute URL.", 400);
+      return renderError(request, "Malformed target URL. Please provide a valid absolute URL.", 400, targetUrlParam);
     }
 
     // Prevent recursive proxy loops
     if (targetUrl.hostname === requestUrl.hostname) {
-      return jsonErrorResponse("Loop detected: The target URL cannot point to this accelerator.", 400);
+      return renderError(request, "Loop detected: The target URL cannot point to this accelerator.", 400, targetUrlParam);
     }
 
     // Construct forward headers
@@ -90,23 +83,28 @@ export default {
     const ifNoneMatch = request.headers.get("If-None-Match");
     if (ifNoneMatch) forwardHeaders.set("If-None-Match", ifNoneMatch);
 
-    // Realistic browser User-Agent to bypass aggressive bot blocks
+    // Realistic modern browser User-Agent
     const clientUA = request.headers.get("User-Agent");
     forwardHeaders.set(
       "User-Agent",
       clientUA && !clientUA.includes("Cloudflare-Workers")
         ? clientUA
-        : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     );
 
-    // Origin Referer to defeat naive anti-hotlinking
+    // Origin Referer: Never forward the worker's own domain as referer (avoids hotlink blocks)
     const clientReferer = request.headers.get("Referer");
-    forwardHeaders.set("Referer", clientReferer || targetUrl.origin);
+    if (clientReferer && !clientReferer.includes(requestUrl.hostname)) {
+      forwardHeaders.set("Referer", clientReferer);
+    } else {
+      forwardHeaders.set("Referer", targetUrl.origin + "/");
+    }
 
-    // Standard Accept header
+    // Standard Accept headers
     forwardHeaders.set("Accept", request.headers.get("Accept") || "*/*");
+    forwardHeaders.set("Accept-Language", request.headers.get("Accept-Language") || "en-US,en;q=0.9");
 
-    // Fetch from origin with Cloudflare Edge caching enabled
+    // Fetch from origin
     try {
       const originResponse = await fetch(targetUrl.toString(), {
         method: request.method,
@@ -144,14 +142,25 @@ export default {
         responseHeaders.set("Accept-Ranges", "bytes");
       }
 
-      // Automatic filename fallback if origin doesn't specify Content-Disposition
-      if (!responseHeaders.has("Content-Disposition")) {
-        const pathSegments = targetUrl.pathname.split("/").filter(Boolean);
-        const lastSegment = pathSegments.pop();
-        if (lastSegment && lastSegment.includes(".")) {
-          const cleanFilename = decodeURIComponent(lastSegment).replace(/[^\w.-]/g, "_");
-          responseHeaders.set("Content-Disposition", `attachment; filename="${cleanFilename}"`);
+      // Extract filename from URL path if not provided
+      let filename = "";
+      const pathSegments = targetUrl.pathname.split("/").filter(Boolean);
+      const lastSegment = pathSegments.pop();
+      if (lastSegment && lastSegment.includes(".")) {
+        filename = decodeURIComponent(lastSegment).replace(/[^\w.-]/g, "_");
+      }
+
+      // Ensure Content-Disposition enforces attachment for direct download trigger
+      const existingDisp = responseHeaders.get("Content-Disposition");
+      if (!existingDisp) {
+        if (filename) {
+          responseHeaders.set("Content-Disposition", `attachment; filename="${filename}"`);
+        } else {
+          responseHeaders.set("Content-Disposition", "attachment; filename=\"downloaded_file.bin\"");
         }
+      } else if (!existingDisp.toLowerCase().includes("attachment")) {
+        // If origin sent 'inline', replace with 'attachment' so browser downloads rather than opens
+        responseHeaders.set("Content-Disposition", existingDisp.replace(/inline/i, "attachment"));
       }
 
       // CORS headers
@@ -162,6 +171,11 @@ export default {
       responseHeaders.set("X-Accelerated-By", "CDNFlare-Edge");
       responseHeaders.set("X-Origin-Status", originResponse.status.toString());
 
+      // If origin returned 4xx or 5xx, surface clean error
+      if (originResponse.status >= 400 && !responseHeaders.get("Content-Range")) {
+        return renderError(request, `Origin server returned HTTP ${originResponse.status}: ${originResponse.statusText}`, originResponse.status, targetUrl.toString());
+      }
+
       // Stream directly to client without buffering entire body into RAM
       return new Response(originResponse.body, {
         status: originResponse.status,
@@ -170,30 +184,98 @@ export default {
       });
 
     } catch (err) {
-      return jsonErrorResponse(
-        `Failed to reach origin server: ${err.message || "Network Error"}. Please verify that the target URL is accessible.`,
-        502
+      return renderError(
+        request,
+        `Failed to reach origin server: ${err.message || "Network Error"}. Please verify that the target URL is accessible and online.`,
+        502,
+        targetUrl.toString()
       );
     }
   }
 };
 
-function jsonErrorResponse(message, status = 500) {
-  return new Response(
-    JSON.stringify({
-      success: false,
-      status: status,
-      error: message,
-      timestamp: new Date().toISOString()
-    }, null, 2),
-    {
-      status: status,
-      headers: {
-        "Content-Type": "application/json; charset=UTF-8",
-        "Access-Control-Allow-Origin": "*"
-      }
+/**
+ * Robust target URL extractor that prevents query parameter truncation
+ */
+function extractTargetUrl(rawUrlString) {
+  // Case 1: Query param e.g. /?url=...
+  const queryIndex = rawUrlString.indexOf("?url=");
+  if (queryIndex !== -1) {
+    let extracted = rawUrlString.slice(queryIndex + 5);
+    // If double encoded, decode once
+    if (extracted.startsWith("http%3A") || extracted.startsWith("https%3A")) {
+      try {
+        extracted = decodeURIComponent(extracted);
+      } catch {}
     }
-  );
+    return extracted;
+  }
+
+  // Case 2: Path prefix e.g. /https://... or /http://...
+  const parsed = new URL(rawUrlString);
+  const path = parsed.pathname.slice(1);
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path + parsed.search;
+  }
+
+  return null;
+}
+
+function renderError(request, message, status = 500, targetUrl = "") {
+  const accept = request.headers.get("Accept") || "";
+  
+  // Return JSON if caller is an API client or download manager
+  if (!accept.includes("text/html")) {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        status: status,
+        error: message,
+        target: targetUrl,
+        timestamp: new Date().toISOString()
+      }, null, 2),
+      {
+        status: status,
+        headers: {
+          "Content-Type": "application/json; charset=UTF-8",
+          "Access-Control-Allow-Origin": "*"
+        }
+      }
+    );
+  }
+
+  // Return stylish HTML error page for human browser users
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CDNFlare | Connection Notice</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #090d16; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1.5rem; }
+    .card { background: #111827; border: 1px solid #1f293d; border-radius: 16px; padding: 2rem; max-width: 520px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
+    h2 { color: #f87171; font-size: 1.35rem; margin-top: 0; display: flex; align-items: center; gap: 0.5rem; }
+    p { color: #94a3b8; font-size: 0.95rem; line-height: 1.5; margin: 1rem 0; }
+    .url-box { background: #080c14; padding: 0.75rem; border-radius: 8px; font-family: monospace; font-size: 0.8rem; color: #38bdf8; word-break: break-all; border: 1px solid #1f293d; margin: 1rem 0; }
+    .btn { display: inline-block; background: #38bdf8; color: #090d16; text-decoration: none; padding: 0.75rem 1.25rem; border-radius: 8px; font-weight: 600; font-size: 0.9rem; transition: 0.2s; }
+    .btn:hover { background: #7dd3fc; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>⚠️ Unable to Stream Target File</h2>
+    <p>${message}</p>
+    ${targetUrl ? `<div class="url-box">Target: ${targetUrl}</div>` : ''}
+    <p style="font-size: 0.85rem; color: #64748b;">Status Code: ${status}</p>
+    <a href="/" class="btn">← Back to Dashboard</a>
+  </div>
+</body>
+</html>`;
+
+  return new Response(html, {
+    status: status,
+    headers: { "Content-Type": "text/html; charset=UTF-8" }
+  });
 }
 
 function renderWebUI(origin) {
@@ -307,12 +389,14 @@ function renderWebUI(origin) {
 
     .input-wrapper {
       position: relative;
+      display: flex;
+      align-items: center;
       margin-bottom: 1rem;
     }
 
     input[type="url"] {
       width: 100%;
-      padding: 1rem 1.2rem;
+      padding: 1rem 5.5rem 1rem 1.2rem;
       background: #090e17;
       border: 1px solid var(--border-color);
       border-radius: 12px;
@@ -328,13 +412,36 @@ function renderWebUI(origin) {
       box-shadow: 0 0 0 3px var(--accent-glow);
     }
 
-    .speed-tip {
+    .paste-btn {
+      position: absolute;
+      right: 8px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: var(--accent);
       font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.5rem 0.85rem;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.15s ease;
+    }
+
+    .paste-btn:hover {
+      background: #334155;
+      border-color: var(--accent);
+      transform: scale(1.02);
+    }
+
+    .speed-tip {
+      font-size: 0.82rem;
       color: #94a3b8;
       background: #0c1322;
       border: 1px solid #1e293d;
-      padding: 0.65rem 0.9rem;
-      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
       margin-bottom: 1.25rem;
       line-height: 1.45;
     }
@@ -409,6 +516,7 @@ function renderWebUI(origin) {
       margin-bottom: 0.75rem;
       border-bottom: 1px solid #1f293d;
       padding-bottom: 0.5rem;
+      overflow-x: auto;
     }
 
     .tab-btn {
@@ -420,6 +528,7 @@ function renderWebUI(origin) {
       padding: 0.4rem 0.8rem;
       border-radius: 6px;
       cursor: pointer;
+      white-space: nowrap;
       transition: all 0.15s;
     }
 
@@ -544,6 +653,9 @@ function renderWebUI(origin) {
           spellcheck="false"
           required 
         />
+        <button type="button" class="paste-btn" id="pasteBtn" onclick="handlePaste()" title="Paste from clipboard">
+          <span>📋 Paste</span>
+        </button>
       </div>
 
       <div class="speed-tip">
@@ -602,11 +714,35 @@ function renderWebUI(origin) {
     let currentTab = 'direct';
     let currentUrl = '';
 
+    async function handlePaste() {
+      const input = document.getElementById('urlInput');
+      const btn = document.getElementById('pasteBtn');
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          input.value = text.trim();
+          btn.innerHTML = '<span>✅ Pasted!</span>';
+          btn.style.color = '#10b981';
+          btn.style.borderColor = '#10b981';
+          setTimeout(() => {
+            btn.innerHTML = '<span>📋 Paste</span>';
+            btn.style.color = '';
+            btn.style.borderColor = '';
+          }, 1800);
+        }
+      } catch (err) {
+        // Fallback if browser requires user gesture / permission
+        input.focus();
+        input.select();
+        alert('Please press Ctrl+V to paste your link.');
+      }
+    }
+
     function getValidatedUrl() {
       const input = document.getElementById('urlInput');
       const raw = input.value.trim();
       if (!raw) {
-        alert('Please enter a valid download link!');
+        alert('Please enter or paste a valid download link!');
         input.focus();
         return null;
       }
