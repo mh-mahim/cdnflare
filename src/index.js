@@ -1,7 +1,8 @@
 /**
  * Cloudflare CDN Reverse Proxy & Download Accelerator
  * Author: mh-mahim
- * Description: High-speed edge streaming proxy with BDIX/DAC peering, Range support for IDM, and embedded modern Web UI.
+ * Repository: https://github.com/mh-mahim/cdn-download-accelerator
+ * License: MIT
  */
 
 export default {
@@ -21,15 +22,23 @@ export default {
       });
     }
 
-    // Only allow GET and HEAD
+    // Only allow GET and HEAD requests
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
-    // Extract target URL from query parameter or path
-    const targetUrlParam = requestUrl.searchParams.get("url");
+    // 1. Extract Target URL from Query (?url=...) or Path (/https://...)
+    let targetUrlParam = requestUrl.searchParams.get("url");
 
-    // If no target URL is provided, serve the Web UI
+    if (!targetUrlParam) {
+      // Check pathname (e.g. /https://example.com/file.zip or /http://...)
+      const rawPath = requestUrl.pathname.slice(1); // remove leading slash
+      if (rawPath.startsWith("http://") || rawPath.startsWith("https://")) {
+        targetUrlParam = rawPath + requestUrl.search;
+      }
+    }
+
+    // If no target URL, serve the Web UI (English)
     if (!targetUrlParam) {
       return new Response(renderWebUI(requestUrl.origin), {
         headers: {
@@ -39,23 +48,31 @@ export default {
       });
     }
 
-    // Validate and parse the target URL
+    // Optional Access Token Authentication (if env.ACCESS_TOKEN is configured)
+    if (env.ACCESS_TOKEN) {
+      const userToken = requestUrl.searchParams.get("token") || request.headers.get("x-access-token");
+      if (userToken !== env.ACCESS_TOKEN) {
+        return jsonErrorResponse("Unauthorized: Invalid or missing access token.", 401);
+      }
+    }
+
+    // Validate and parse target URL
     let targetUrl;
     try {
       targetUrl = new URL(targetUrlParam.trim());
       if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
-        return jsonErrorResponse("Invalid URL protocol. Only HTTP and HTTPS are supported.", 400);
+        return jsonErrorResponse("Invalid URL protocol. Only HTTP and HTTPS protocols are supported.", 400);
       }
     } catch {
-      return jsonErrorResponse("Malformed URL provided. Please provide a valid absolute URL.", 400);
+      return jsonErrorResponse("Malformed target URL. Please provide a valid absolute URL.", 400);
     }
 
     // Prevent recursive proxy loops
     if (targetUrl.hostname === requestUrl.hostname) {
-      return jsonErrorResponse("Loop detected: Target URL cannot be this worker itself.", 400);
+      return jsonErrorResponse("Loop detected: The target URL cannot point to this accelerator worker.", 400);
     }
 
-    // Build forward request headers
+    // Construct forward headers
     const forwardHeaders = new Headers();
 
     // Preserve client Range header (Essential for IDM, multi-threaded downloads, and resuming)
@@ -73,7 +90,7 @@ export default {
     const ifNoneMatch = request.headers.get("If-None-Match");
     if (ifNoneMatch) forwardHeaders.set("If-None-Match", ifNoneMatch);
 
-    // Forward or set realistic browser User-Agent
+    // Realistic browser User-Agent to bypass aggressive bot blocks
     const clientUA = request.headers.get("User-Agent");
     forwardHeaders.set(
       "User-Agent",
@@ -82,15 +99,12 @@ export default {
         : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     );
 
-    // Set origin Referer to bypass hotlink protections
+    // Origin Referer to defeat naive hotlink protections
     const clientReferer = request.headers.get("Referer");
     forwardHeaders.set("Referer", clientReferer || targetUrl.origin);
 
-    // Accept standard content types
-    forwardHeaders.set(
-      "Accept",
-      request.headers.get("Accept") || "*/*"
-    );
+    // Standard Accept header
+    forwardHeaders.set("Accept", request.headers.get("Accept") || "*/*");
 
     // Fetch from origin with Cloudflare Edge caching enabled
     try {
@@ -100,15 +114,14 @@ export default {
         redirect: "follow",
         cf: {
           cacheEverything: true,
-          cacheTtl: 86400 // Cache for 24 hours if eligible
+          cacheTtl: 86400 // Cache for 24 hours when eligible
         }
       });
 
-      // Prepare response headers for client
+      // Prepare client response headers
       const responseHeaders = new Headers();
 
-      // Pass crucial headers
-      const headersToPass = [
+      const passHeaders = [
         "content-type",
         "content-length",
         "content-range",
@@ -121,25 +134,35 @@ export default {
 
       for (const [key, value] of originResponse.headers.entries()) {
         const lowerKey = key.toLowerCase();
-        if (headersToPass.includes(lowerKey)) {
+        if (passHeaders.includes(lowerKey)) {
           responseHeaders.set(key, value);
         }
       }
 
-      // Ensure Accept-Ranges is always present so download managers know slicing is allowed
+      // Ensure Accept-Ranges is enabled so IDM/Aria2 can slice into parallel chunks
       if (!responseHeaders.has("Accept-Ranges")) {
         responseHeaders.set("Accept-Ranges", "bytes");
       }
 
-      // Add CORS headers for web clients
+      // Automatic filename fallback if origin doesn't specify Content-Disposition
+      if (!responseHeaders.has("Content-Disposition")) {
+        const pathSegments = targetUrl.pathname.split("/").filter(Boolean);
+        const lastSegment = pathSegments.pop();
+        if (lastSegment && lastSegment.includes(".")) {
+          const cleanFilename = decodeURIComponent(lastSegment).replace(/[^\w.-]/g, "_");
+          responseHeaders.set("Content-Disposition", `attachment; filename="${cleanFilename}"`);
+        }
+      }
+
+      // CORS headers
       responseHeaders.set("Access-Control-Allow-Origin", "*");
       responseHeaders.set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Disposition");
 
-      // Custom accelerator signature headers
-      responseHeaders.set("X-Accelerated-By", "Cloudflare-Worker-DAC");
+      // Accelerator signature headers
+      responseHeaders.set("X-Accelerated-By", "Cloudflare-Worker-Edge");
       responseHeaders.set("X-Origin-Status", originResponse.status.toString());
 
-      // Stream the response directly to the client without buffering
+      // Stream directly to client without buffering entire body into RAM
       return new Response(originResponse.body, {
         status: originResponse.status,
         statusText: originResponse.statusText,
@@ -148,7 +171,7 @@ export default {
 
     } catch (err) {
       return jsonErrorResponse(
-        `Failed to reach origin server: ${err.message || "Network Error"}. Please verify that the target URL is accessible and online.`,
+        `Failed to reach origin server: ${err.message || "Network Error"}. Please verify that the target URL is accessible.`,
         502
       );
     }
@@ -162,7 +185,7 @@ function jsonErrorResponse(message, status = 500) {
       status: status,
       error: message,
       timestamp: new Date().toISOString()
-    }),
+    }, null, 2),
     {
       status: status,
       headers: {
@@ -175,7 +198,7 @@ function jsonErrorResponse(message, status = 500) {
 
 function renderWebUI(origin) {
   return `<!DOCTYPE html>
-<html lang="bn">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -185,14 +208,15 @@ function renderWebUI(origin) {
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0b0f19;
+      --bg: #090d16;
       --card-bg: #111827;
-      --card-border: #1f2937;
+      --card-border: #1f293d;
       --accent: #38bdf8;
-      --accent-glow: rgba(56, 189, 248, 0.15);
+      --accent-glow: rgba(56, 189, 248, 0.16);
       --accent-hover: #0284c7;
       --text-main: #f8fafc;
       --text-muted: #94a3b8;
+      --border-color: #334155;
       --success: #10b981;
     }
 
@@ -211,15 +235,15 @@ function renderWebUI(origin) {
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 1.5rem;
+      padding: 2rem 1.5rem;
       background-image: 
-        radial-gradient(circle at 15% 20%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
-        radial-gradient(circle at 85% 80%, rgba(14, 165, 233, 0.06) 0%, transparent 40%);
+        radial-gradient(circle at 10% 15%, rgba(56, 189, 248, 0.1) 0%, transparent 45%),
+        radial-gradient(circle at 90% 85%, rgba(14, 165, 233, 0.08) 0%, transparent 45%);
     }
 
     .container {
       width: 100%;
-      max-width: 640px;
+      max-width: 680px;
     }
 
     .header {
@@ -231,14 +255,14 @@ function renderWebUI(origin) {
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
-      padding: 0.35rem 0.85rem;
+      padding: 0.35rem 0.9rem;
       border-radius: 9999px;
       font-size: 0.8rem;
       font-weight: 600;
       background: var(--accent-glow);
       color: var(--accent);
-      border: 1px solid rgba(56, 189, 248, 0.25);
-      margin-bottom: 1rem;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      margin-bottom: 1.25rem;
     }
 
     .badge-dot {
@@ -250,48 +274,48 @@ function renderWebUI(origin) {
     }
 
     h1 {
-      font-size: 2.1rem;
+      font-size: 2.25rem;
       font-weight: 800;
-      letter-spacing: -0.025em;
+      letter-spacing: -0.03em;
       line-height: 1.2;
-      margin-bottom: 0.6rem;
+      margin-bottom: 0.75rem;
     }
 
     .subtitle {
       color: var(--text-muted);
-      font-size: 0.95rem;
+      font-size: 1rem;
       line-height: 1.5;
     }
 
     .card {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
-      border-radius: 16px;
+      border-radius: 18px;
       padding: 2rem;
-      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.7);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      margin-bottom: 1.5rem;
     }
 
     .input-label {
-      display: block;
-      font-size: 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.88rem;
       font-weight: 600;
       color: var(--text-muted);
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.6rem;
     }
 
-    .input-group {
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
+    .input-wrapper {
+      position: relative;
       margin-bottom: 1.25rem;
     }
 
     input[type="url"] {
       width: 100%;
-      padding: 0.9rem 1.1rem;
-      background: #0b0f19;
-      border: 1px solid #334155;
-      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      background: #090e17;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
       color: var(--text-main);
       font-size: 0.95rem;
       outline: none;
@@ -304,14 +328,14 @@ function renderWebUI(origin) {
       box-shadow: 0 0 0 3px var(--accent-glow);
     }
 
-    .button-row {
+    .btn-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 0.75rem;
     }
 
-    @media (max-width: 480px) {
-      .button-row {
+    @media (max-width: 520px) {
+      .btn-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -321,8 +345,8 @@ function renderWebUI(origin) {
       align-items: center;
       justify-content: center;
       gap: 0.5rem;
-      padding: 0.85rem 1.25rem;
-      border-radius: 10px;
+      padding: 0.9rem 1.25rem;
+      border-radius: 12px;
       font-size: 0.95rem;
       font-weight: 600;
       cursor: pointer;
@@ -333,7 +357,7 @@ function renderWebUI(origin) {
 
     .btn-primary {
       background: var(--accent);
-      color: #0b0f19;
+      color: #090e17;
     }
 
     .btn-primary:hover {
@@ -352,82 +376,131 @@ function renderWebUI(origin) {
       border-color: #475569;
     }
 
-    .status-box {
+    /* Output Results Panel */
+    .output-panel {
       display: none;
-      margin-top: 1.25rem;
-      padding: 1rem;
-      border-radius: 10px;
-      background: #0f172a;
-      border: 1px solid #1e293b;
-      font-size: 0.88rem;
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--card-border);
     }
 
-    .status-box.show {
+    .output-panel.active {
       display: block;
     }
 
-    .status-title {
-      font-weight: 600;
-      color: var(--accent);
-      margin-bottom: 0.35rem;
+    .tab-nav {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+      border-bottom: 1px solid #1f293d;
+      padding-bottom: 0.5rem;
     }
 
-    .code-box {
-      background: #080c14;
-      padding: 0.6rem 0.8rem;
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.4rem 0.8rem;
       border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tab-btn.active {
+      background: #1e293b;
+      color: var(--accent);
+    }
+
+    .code-container {
+      position: relative;
+      background: #080c14;
+      border: 1px solid #1f293d;
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
+      font-size: 0.85rem;
       color: #38bdf8;
       word-break: break-all;
-      margin-top: 0.4rem;
-      border: 1px solid #1e293b;
-    }
-
-    .guide-card {
-      margin-top: 1.5rem;
-      background: rgba(17, 24, 39, 0.6);
-      border: 1px solid #1f2937;
-      border-radius: 12px;
-      padding: 1.25rem 1.5rem;
-    }
-
-    .guide-title {
-      font-size: 0.9rem;
-      font-weight: 700;
-      color: #e2e8f0;
-      margin-bottom: 0.5rem;
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      justify-content: space-between;
+      gap: 1rem;
     }
 
-    .guide-list {
-      list-style: none;
-      font-size: 0.82rem;
-      color: var(--text-muted);
-      line-height: 1.6;
+    .copy-icon-btn {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: var(--text-main);
+      padding: 0.4rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
     }
 
-    .guide-list li::before {
-      content: "•";
-      color: var(--accent);
-      font-weight: bold;
-      display: inline-block;
-      width: 1em;
-      margin-left: -1em;
+    .copy-icon-btn:hover {
+      background: #334155;
+      border-color: var(--accent);
     }
 
-    .guide-list li {
-      padding-left: 1em;
+    /* Features Grid */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    @media (max-width: 600px) {
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .feature-item {
+      background: rgba(17, 24, 39, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .feature-icon {
+      font-size: 1.25rem;
       margin-bottom: 0.35rem;
+    }
+
+    .feature-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 0.2rem;
+    }
+
+    .feature-desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      line-height: 1.4;
     }
 
     .footer {
       text-align: center;
-      margin-top: 2rem;
-      font-size: 0.8rem;
+      font-size: 0.85rem;
       color: #64748b;
+      line-height: 1.6;
+    }
+
+    .footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .footer a:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
@@ -436,96 +509,162 @@ function renderWebUI(origin) {
     <div class="header">
       <div class="badge">
         <span class="badge-dot"></span>
-        <span>Dhaka PoP (DAC) & BDIX Edge</span>
+        <span>Cloudflare Edge &bull; BDIX &amp; Local Peering</span>
       </div>
       <h1>CDN Download Accelerator</h1>
-      <p class="subtitle">স্লো আন্তর্জাতিক লিংক ক্লাউডফ্লেয়ার এজ দিয়ে হাই-স্পিডে ডাউনলোড করুন</p>
+      <p class="subtitle">Bypass international throttling and stream slow remote files at full line speed</p>
     </div>
 
     <div class="card">
-      <label class="input-label" for="urlInput">ডাউনলোড ফাইল লিংক পেস্ট করুন</label>
-      <div class="input-group">
+      <div class="input-label">
+        <span>Enter Target Download URL</span>
+        <span style="font-size: 0.75rem; color: #64748b;">Direct HTTP/HTTPS links</span>
+      </div>
+
+      <div class="input-wrapper">
         <input 
           type="url" 
           id="urlInput" 
           placeholder="https://example.com/slow-large-file.zip" 
           autocomplete="off" 
+          spellcheck="false"
           required 
         />
       </div>
 
-      <div class="button-row">
-        <button class="btn btn-primary" onclick="handleDownload()">
-          <span>🚀 ডাউনলোড শুরু করুন</span>
+      <div class="btn-grid">
+        <button class="btn btn-primary" onclick="triggerDownload()">
+          <span>🚀 Instant Download</span>
         </button>
-        <button class="btn btn-secondary" onclick="handleCopyLink()">
-          <span>📋 অ্যাক্সিলারেটেড লিংক কপি</span>
+        <button class="btn btn-secondary" onclick="generateLinks()">
+          <span>📋 Generate Multi-Tool Links</span>
         </button>
       </div>
 
-      <div id="statusBox" class="status-box">
-        <div class="status-title" id="statusTitle">লিংক তৈরি সম্পন্ন!</div>
-        <div class="code-box" id="acceleratedUrlDisplay"></div>
+      <div id="outputPanel" class="output-panel">
+        <div class="tab-nav">
+          <button class="tab-btn active" onclick="switchTab('direct')">Direct URL / IDM</button>
+          <button class="tab-btn" onclick="switchTab('aria2')">Aria2 (16 Threads)</button>
+          <button class="tab-btn" onclick="switchTab('curl')">cURL</button>
+          <button class="tab-btn" onclick="switchTab('wget')">Wget</button>
+        </div>
+
+        <div class="code-container">
+          <span id="codeDisplay"></span>
+          <button class="copy-icon-btn" id="copyBtn" onclick="copyCurrentSnippet()">Copy</button>
+        </div>
       </div>
     </div>
 
-    <div class="guide-card">
-      <div class="guide-title">
-        <span>⚡ IDM / Aria2 / Downloader এ কীভাবে ব্যবহার করবেন:</span>
+    <div class="features-grid">
+      <div class="feature-item">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-title">HTTP 206 Partial Content</div>
+        <div class="feature-desc">Full <code>Range</code> support for IDM, resuming, and multi-threaded slicing.</div>
       </div>
-      <ul class="guide-list">
-        <li>উপরের <strong>"অ্যাক্সিলারেটেড লিংক কপি"</strong> বাটনে ক্লিক করে রূপান্তরিত লিংকটি কপি করুন।</li>
-        <li>আপনার <strong>IDM (Internet Download Manager)</strong>-এ <em>Add URL</em> দিয়ে পেস্ট করুন।</li>
-        <li>আমাদের ওয়ার্কারে <code>Range</code> হেডার সাপোর্ট থাকায় IDM ১৬টি থ্রেড দিয়ে ফুল ৯০-৯৫ Mbps স্পিডে রিজিউমেবল ডাউনলোড করতে পারবে।</li>
-      </ul>
+      <div class="feature-item">
+        <div class="feature-icon">🛡️</div>
+        <div class="feature-title">Hotlink Bypass</div>
+        <div class="feature-desc">Auto-forwards origin referers to overcome anti-leech blocks.</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">🌐</div>
+        <div class="feature-title">Zero-Buffer Stream</div>
+        <div class="feature-desc">Direct pipeline streaming supporting files of any size without RAM limits.</div>
+      </div>
     </div>
 
     <div class="footer">
-      Powered by Cloudflare Workers &bull; Dhaka Edge Peering &bull; Built with &hearts; by mh-mahim
+      Open Source on <a href="https://github.com/mh-mahim/cdn-download-accelerator" target="_blank" rel="noopener">GitHub</a> &bull; Powered by Cloudflare Workers &bull; Crafted by <a href="https://github.com/mh-mahim" target="_blank" rel="noopener">mh-mahim</a>
     </div>
   </div>
 
   <script>
     const origin = window.location.origin;
+    let currentTab = 'direct';
+    let currentUrl = '';
 
-    function getAcceleratedUrl() {
+    function getValidatedUrl() {
       const input = document.getElementById('urlInput');
-      const rawUrl = input.value.trim();
-      if (!rawUrl) {
-        alert('অনুগ্রহ করে একটি সঠিক ডাউনলোড লিংক দিন!');
+      const raw = input.value.trim();
+      if (!raw) {
+        alert('Please enter a valid download link!');
         input.focus();
         return null;
       }
       try {
-        new URL(rawUrl);
+        const u = new URL(raw);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+          throw new Error('Only HTTP/HTTPS are supported');
+        }
+        return raw;
       } catch (e) {
-        alert('ভুল URL ফরম্যাট! লিংকটি https:// বা http:// দিয়ে শুরু হতে হবে।');
+        alert('Invalid URL format! Ensure the link begins with http:// or https://');
         input.focus();
         return null;
       }
-      return origin + '/?url=' + encodeURIComponent(rawUrl);
     }
 
-    function handleDownload() {
-      const accUrl = getAcceleratedUrl();
-      if (!accUrl) return;
-      window.location.href = accUrl;
+    function triggerDownload() {
+      const url = getValidatedUrl();
+      if (!url) return;
+      window.location.href = origin + '/?url=' + encodeURIComponent(url);
     }
 
-    function handleCopyLink() {
-      const accUrl = getAcceleratedUrl();
-      if (!accUrl) return;
+    function generateLinks() {
+      const url = getValidatedUrl();
+      if (!url) return;
+      currentUrl = url;
 
-      navigator.clipboard.writeText(accUrl).then(() => {
-        const box = document.getElementById('statusBox');
-        const display = document.getElementById('acceleratedUrlDisplay');
-        const title = document.getElementById('statusTitle');
-        
-        title.innerText = '✅ লিংক কপি হয়েছে! (IDM এ পেস্ট করুন)';
-        display.innerText = accUrl;
-        box.classList.add('show');
+      document.getElementById('outputPanel').classList.add('active');
+      renderSnippet();
+    }
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.innerText.toLowerCase().includes(tab));
+      });
+      renderSnippet();
+    }
+
+    function renderSnippet() {
+      if (!currentUrl) return;
+      const acceleratedUrl = origin + '/?url=' + encodeURIComponent(currentUrl);
+      const display = document.getElementById('codeDisplay');
+      
+      switch (currentTab) {
+        case 'direct':
+          display.innerText = acceleratedUrl;
+          break;
+        case 'aria2':
+          display.innerText = 'aria2c -s 16 -x 16 "' + acceleratedUrl + '"';
+          break;
+        case 'curl':
+          display.innerText = 'curl -L -O -C - "' + acceleratedUrl + '"';
+          break;
+        case 'wget':
+          display.innerText = 'wget -c "' + acceleratedUrl + '"';
+          break;
+      }
+    }
+
+    function copyCurrentSnippet() {
+      const text = document.getElementById('codeDisplay').innerText;
+      if (!text) return;
+
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.innerText = 'Copied!';
+        btn.style.color = '#10b981';
+        btn.style.borderColor = '#10b981';
+        setTimeout(() => {
+          btn.innerText = 'Copy';
+          btn.style.color = '';
+          btn.style.borderColor = '';
+        }, 2000);
       }).catch(() => {
-        prompt('নিচের লিংকটি কপি করে নিন:', accUrl);
+        prompt('Copy to clipboard:', text);
       });
     }
   </script>
