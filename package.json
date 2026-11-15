@@ -1,19 +1,32 @@
 {
   "name": "cdn-download-accelerator",
-  "version": "1.0.0",
-  "description": "High-speed Cloudflare CDN reverse proxy and download accelerator with Range support and Web UI",
+  "version": "1.1.0",
+  "description": "High-speed Cloudflare Workers CDN reverse proxy & download accelerator with HTTP 206 Range support, BDIX optimization, and modern Web UI",
   "main": "src/index.js",
+  "homepage": "https://cdn-download-accelerator.mahimmdmh.workers.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mh-mahim/cdn-download-accelerator.git"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
   "keywords": [
     "cloudflare-workers",
-    "cdn",
-    "reverse-proxy",
     "download-accelerator",
+    "reverse-proxy",
+    "cdn",
     "bdix",
-    "streaming"
+    "idm",
+    "aria2",
+    "serverless",
+    "streaming",
+    "http-proxy",
+    "fast-download",
+    "edge-computing",
+    "http-206-partial-content",
+    "traffic-accelerator"
   ],
   "author": "mh-mahim",
   "license": "MIT"
